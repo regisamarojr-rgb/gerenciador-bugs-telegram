@@ -7,7 +7,6 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const ALLOWED_USER = process.env.TELEGRAM_USER_ID;
 const SB_URL = process.env.SUPABASE_URL || 'https://vxthbjrdtwlnzzadmrmy.supabase.co';
 const SB_KEY = process.env.SUPABASE_KEY || 'sb_publishable_MUJi3VnZ-f4cMhdLxZfR1A_pFmhhQSi';
-const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const VERCEL_TOKEN = process.env.VERCEL_TOKEN;
 const VERCEL_PROJECT = process.env.VERCEL_PROJECT || 'gerenciador-bet';
 const DASHBOARD_URL = `https://${VERCEL_PROJECT}.vercel.app`;
@@ -78,36 +77,6 @@ async function atualizarDashboard(htmlContent) {
   const data = await r.json();
   if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
   return data.url || data.id || 'deploy iniciado';
-}
-
-// ─── TRANSCRIÇÃO DE ÁUDIO (WHISPER) ───────────────────────────────────────
-async function downloadTelegramFile(fileId) {
-  const r = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
-  const d = await r.json();
-  if (!d.ok) throw new Error('Erro ao obter arquivo do Telegram');
-  const filePath = d.result.file_path;
-  const fileRes = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`);
-  if (!fileRes.ok) throw new Error('Erro ao baixar arquivo do Telegram');
-  const buffer = Buffer.from(await fileRes.arrayBuffer());
-  const ext = filePath.split('.').pop() || 'ogg';
-  return { buffer, ext };
-}
-
-async function transcribeAudio(fileId) {
-  if (!OPENAI_KEY) throw new Error('OPENAI_API_KEY não configurada');
-  const { buffer, ext } = await downloadTelegramFile(fileId);
-  const form = new FormData();
-  form.append('file', new Blob([buffer], { type: `audio/${ext}` }), `audio.${ext}`);
-  form.append('model', 'whisper-1');
-  form.append('language', 'pt');
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${OPENAI_KEY}` },
-    body: form
-  });
-  if (!res.ok) throw new Error(`Whisper: ${res.status} ${await res.text()}`);
-  const data = await res.json();
-  return (data.text || '').trim();
 }
 
 // ─── DADOS DO PAINEL ───────────────────────────────────────────────────────
@@ -544,10 +513,18 @@ COMPORTAMENTO:
     break;
   }
 
-  historicos[userId] = messages.filter(m =>
-    m.role === 'user' && typeof m.content === 'string'
-    || m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'text')
-  ).slice(-20);
+  historicos[userId] = messages
+    .filter(m =>
+      (m.role === 'user' && typeof m.content === 'string') ||
+      (m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'text'))
+    )
+    .map(m => {
+      if (m.role === 'assistant' && Array.isArray(m.content)) {
+        return { ...m, content: m.content.filter(b => b.type === 'text') };
+      }
+      return m;
+    })
+    .slice(-20);
 
   return resposta || '⚠️ Não consegui processar sua mensagem.';
 }
@@ -594,27 +571,6 @@ bot.on('text', async ctx => {
     await ctx.reply(`❌ Erro: ${err.message}`);
   }
 });
-
-// ─── HANDLERS DE ÁUDIO ────────────────────────────────────────────────────
-async function handleAudioMsg(ctx, fileId) {
-  const userId = ctx.from.id.toString();
-  if (ALLOWED_USER && userId !== ALLOWED_USER) return ctx.reply('⛔ Acesso não autorizado.');
-  if (!OPENAI_KEY) return ctx.reply('⚠️ Transcrição de áudio requer OPENAI_API_KEY.\nAdicione nas variáveis de ambiente do Railway.');
-  await ctx.sendChatAction('typing');
-  try {
-    const texto = await transcribeAudio(fileId);
-    if (!texto) return ctx.reply('⚠️ Não consegui entender o áudio. Tente falar novamente.');
-    await ctx.reply(`🎤 _"${texto}"_`, { parse_mode: 'Markdown' });
-    const resposta = await processarMensagem(userId, texto);
-    await ctx.replyWithMarkdown(resposta);
-  } catch (err) {
-    console.error('Erro áudio:', err);
-    await ctx.reply(`❌ Erro ao transcrever áudio: ${err.message}`);
-  }
-}
-
-bot.on('voice', ctx => handleAudioMsg(ctx, ctx.message.voice.file_id));
-bot.on('audio', ctx => handleAudioMsg(ctx, ctx.message.audio.file_id));
 
 // ─── START ─────────────────────────────────────────────────────────────────
 bot.launch().then(() => {
