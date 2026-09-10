@@ -3,13 +3,16 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY;
-const ALLOWED_USER   = process.env.TELEGRAM_USER_ID;
-const SB_URL         = process.env.SUPABASE_URL || 'https://vxthbjrdtwlnzzadmrmy.supabase.co';
-const SB_KEY         = process.env.SUPABASE_KEY || 'sb_publishable_MUJi3VnZ-f4cMhdLxZfR1A_pFmhhQSi';
-const OPENAI_KEY     = process.env.OPENAI_API_KEY;
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+const ALLOWED_USER = process.env.TELEGRAM_USER_ID;
+const SB_URL = process.env.SUPABASE_URL || 'https://vxthbjrdtwlnzzadmrmy.supabase.co';
+const SB_KEY = process.env.SUPABASE_KEY || 'sb_publishable_MUJi3VnZ-f4cMhdLxZfR1A_pFmhhQSi';
+const OPENAI_KEY = process.env.OPENAI_API_KEY;
+const VERCEL_TOKEN = process.env.VERCEL_TOKEN;
+const VERCEL_PROJECT = process.env.VERCEL_PROJECT || 'gerenciador-bet';
+const DASHBOARD_URL = `https://${VERCEL_PROJECT}.vercel.app`;
 
-const bot    = new Telegraf(TELEGRAM_TOKEN);
+const bot = new Telegraf(TELEGRAM_TOKEN);
 const claude = new Anthropic({ apiKey: ANTHROPIC_KEY });
 
 // ─── SUPABASE HELPERS ──────────────────────────────────────────────────────
@@ -48,6 +51,33 @@ async function sbDelete(table, id) {
   });
   if (!r.ok) throw new Error(`SB DELETE ${table}: ${r.status} ${await r.text()}`);
   return true;
+}
+
+// ─── VERCEL HELPERS ────────────────────────────────────────────────────────
+async function lerDashboard() {
+  const r = await fetch(DASHBOARD_URL, { headers: { 'Cache-Control': 'no-cache' } });
+  if (!r.ok) throw new Error(`Erro ao buscar dashboard: ${r.status}`);
+  return await r.text();
+}
+
+async function atualizarDashboard(htmlContent) {
+  if (!VERCEL_TOKEN) throw new Error('VERCEL_TOKEN não configurado no Railway');
+  const r = await fetch('https://api.vercel.com/v13/deployments', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${VERCEL_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      name: VERCEL_PROJECT,
+      target: 'production',
+      files: [{ file: 'index.html', data: htmlContent }],
+      projectSettings: { framework: null }
+    })
+  });
+  const data = await r.json();
+  if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+  return data.url || data.id || 'deploy iniciado';
 }
 
 // ─── TRANSCRIÇÃO DE ÁUDIO (WHISPER) ───────────────────────────────────────
@@ -128,12 +158,12 @@ const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        casa:       { type: 'string', description: 'Casa de apostas (ex: Bet365, Superbet, Novibet)' },
-        dono:       { type: 'string', description: 'Nome do dono/titular da conta' },
+        casa: { type: 'string', description: 'Casa de apostas (ex: Bet365, Superbet, Novibet)' },
+        dono: { type: 'string', description: 'Nome do dono/titular da conta' },
         depositado: { type: 'number', description: 'Valor depositado em R$' },
-        pct:        { type: 'number', description: 'Porcentagem do lucro que fica com o dono da conta (0-100)' },
+        pct: { type: 'number', description: 'Porcentagem do lucro que fica com o dono da conta (0-100)' },
         fornecedor: { type: 'string', description: 'Nome do fornecedor que indicou a conta (opcional)' },
-        data:       { type: 'string', description: 'Data do depósito no formato YYYY-MM-DD (padrão: hoje)' }
+        data: { type: 'string', description: 'Data do depósito no formato YYYY-MM-DD (padrão: hoje)' }
       },
       required: ['casa', 'dono', 'depositado', 'pct']
     }
@@ -145,8 +175,8 @@ const TOOLS = [
       type: 'object',
       properties: {
         conta_ref: { type: 'string', description: 'Nome do dono ou parte do nome para identificar a conta' },
-        valor:     { type: 'number', description: 'Valor sacado em R$' },
-        data:      { type: 'string', description: 'Data do saque YYYY-MM-DD (padrão: hoje)' },
+        valor: { type: 'number', description: 'Valor sacado em R$' },
+        data: { type: 'string', description: 'Data do saque YYYY-MM-DD (padrão: hoje)' },
         finalizar: { type: 'boolean', description: 'Se true, muda o status para Finalizada após o saque' }
       },
       required: ['conta_ref', 'valor']
@@ -159,9 +189,9 @@ const TOOLS = [
       type: 'object',
       properties: {
         conta_ref: { type: 'string', description: 'Nome do dono ou parte do nome para identificar a conta' },
-        valor:     { type: 'number', description: 'Valor da perda em R$' },
+        valor: { type: 'number', description: 'Valor da perda em R$' },
         descricao: { type: 'string', description: 'Descrição da perda (opcional)' },
-        data:      { type: 'string', description: 'Data YYYY-MM-DD (padrão: hoje)' }
+        data: { type: 'string', description: 'Data YYYY-MM-DD (padrão: hoje)' }
       },
       required: ['conta_ref', 'valor']
     }
@@ -195,9 +225,9 @@ const TOOLS = [
       type: 'object',
       properties: {
         descricao: { type: 'string', description: 'O que foi gasto (ex: "Assinatura ferramenta X", "Comissão João", "Taxa saque")' },
-        valor:     { type: 'number', description: 'Valor em R$' },
+        valor: { type: 'number', description: 'Valor em R$' },
         categoria: { type: 'string', description: 'Categoria opcional (ex: "ferramenta", "comissão", "taxa", "outros")' },
-        data:      { type: 'string', description: 'Data YYYY-MM-DD (padrão: hoje)' }
+        data: { type: 'string', description: 'Data YYYY-MM-DD (padrão: hoje)' }
       },
       required: ['descricao', 'valor']
     }
@@ -223,6 +253,40 @@ const TOOLS = [
       },
       required: ['descricao_ref']
     }
+  },
+  {
+    name: 'ler_dashboard',
+    description: 'Lê o HTML atual da dashboard (gerenciador-bet.vercel.app). Use antes de modificar para entender a estrutura atual.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'patch_dashboard',
+    description: 'Faz uma substituição de texto na dashboard e redeploya automaticamente no Vercel. Ideal para mudanças pontuais (adicionar seção, mudar cor, ajustar texto). Use ler_dashboard primeiro para ver o HTML atual.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        buscar: { type: 'string', description: 'Texto exato a ser encontrado e substituído no HTML atual' },
+        substituir: { type: 'string', description: 'Novo texto que substituirá o texto encontrado' },
+        descricao: { type: 'string', description: 'Descrição da alteração feita' }
+      },
+      required: ['buscar', 'substituir', 'descricao']
+    }
+  },
+  {
+    name: 'atualizar_dashboard',
+    description: 'Substitui o HTML completo da dashboard e redeploya no Vercel. Use apenas quando precisar reescrever a página inteira. Para mudanças pontuais, prefira patch_dashboard.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        html: { type: 'string', description: 'O HTML completo da nova versão da dashboard' },
+        descricao: { type: 'string', description: 'Descrição das alterações feitas' }
+      },
+      required: ['html', 'descricao']
+    }
   }
 ];
 
@@ -244,9 +308,9 @@ async function executarTool(name, input) {
       const l = calcLucro(c);
       const forn = fornecedores.find(f => f.id === c.fornecedor_id);
       let texto = `*${c.dono}* — ${c.casa} (${c.status})\n`;
-      texto += `  Dep: R$ ${c.depositado?.toFixed(2)} | ${c.pct}%`;
+      texto += ` Dep: R$ ${c.depositado?.toFixed(2)} | ${c.pct}%`;
       if (forn) texto += ` | Forn: ${forn.nome}`;
-      if (l) texto += `\n  💰 Meu lucro: R$ ${l.meuLucro.toFixed(2)} | Cliente: R$ ${l.lucroCliente.toFixed(2)}`;
+      if (l) texto += `\n 💰 Meu lucro: R$ ${l.meuLucro.toFixed(2)} | Cliente: R$ ${l.lucroCliente.toFixed(2)}`;
       return texto;
     }).join('\n\n');
   }
@@ -268,7 +332,7 @@ async function executarTool(name, input) {
 
   if (name === 'registrar_saque') {
     const conta = contas.find(c => c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()) && c.status === 'Em uso')
-                || contas.find(c => c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()));
+      || contas.find(c => c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()));
     if (!conta) return `❌ Conta com "${input.conta_ref}" não encontrada.`;
     const saques = conta.saques || [];
     saques.push({ id: uid(), val: input.valor, data: input.data || hoje });
@@ -284,7 +348,7 @@ async function executarTool(name, input) {
 
   if (name === 'registrar_perda') {
     const conta = contas.find(c => c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()) && c.status === 'Em uso')
-                || contas.find(c => c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()));
+      || contas.find(c => c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()));
     if (!conta) return `❌ Conta com "${input.conta_ref}" não encontrada.`;
     const perdas = conta.perdas || [];
     perdas.push({ id: uid(), val: input.valor, desc: input.descricao || '', data: input.data || hoje });
@@ -327,7 +391,7 @@ async function executarTool(name, input) {
         grupos[key].meu += l.meuLucro; grupos[key].cli += l.lucroCliente; grupos[key].n++;
       });
       let resp = '📊 *Por Fornecedor*\n' + Object.entries(grupos).map(([k, v]) =>
-        `*${k}* (${v.n} contas)\n  💰 R$ ${v.meu.toFixed(2)} | 👥 R$ ${v.cli.toFixed(2)}`
+        `*${k}* (${v.n} contas)\n 💰 R$ ${v.meu.toFixed(2)} | 👥 R$ ${v.cli.toFixed(2)}`
       ).join('\n\n');
       if (totalGastos > 0) resp += `\n\n💸 Gastos operacionais totais: R$ ${totalGastos.toFixed(2)}`;
       return resp;
@@ -378,6 +442,28 @@ async function executarTool(name, input) {
     return `✅ Gasto *${gasto.descricao}* (R$ ${gasto.valor.toFixed(2)}) removido.`;
   }
 
+  // ─── DASHBOARD TOOLS ──────────────────────────────────────────────────────
+  if (name === 'ler_dashboard') {
+    const html = await lerDashboard();
+    const preview = html.substring(0, 4000);
+    return `📊 Dashboard carregada! (${html.length} bytes)\n\nPrimeiros 4000 chars:\n\n${preview}\n\n...(total: ${html.length} chars)`;
+  }
+
+  if (name === 'patch_dashboard') {
+    const htmlAtual = await lerDashboard();
+    if (!htmlAtual.includes(input.buscar)) {
+      return `❌ Texto não encontrado na dashboard.\nVerifique o trecho exato usando ler_dashboard primeiro.`;
+    }
+    const novoHtml = htmlAtual.split(input.buscar).join(input.substituir);
+    const resultado = await atualizarDashboard(novoHtml);
+    return `✅ Dashboard atualizada!\n📝 ${input.descricao}\n🚀 Deploy: ${resultado}\n🌐 ${DASHBOARD_URL}`;
+  }
+
+  if (name === 'atualizar_dashboard') {
+    const resultado = await atualizarDashboard(input.html);
+    return `✅ Dashboard redeplojada com novo HTML!\n📝 ${input.descricao}\n🚀 Deploy: ${resultado}\n🌐 ${DASHBOARD_URL}`;
+  }
+
   return '❓ Ação desconhecida.';
 }
 
@@ -392,7 +478,7 @@ async function processarMensagem(userId, texto) {
   const { contas, fornecedores, gastos } = await getContexto();
   const totalGastos = (gastos || []).reduce((s, g) => s + g.valor, 0);
 
-  const systemPrompt = `Você é o assistente pessoal de Régis para gerenciar as contas de BUGS (apostas esportivas).
+  const systemPrompt = `Você é o assistente pessoal de Régis para gerenciar as contas de BUGS (apostas esportivas) e a dashboard.
 
 CONTEXTO ATUAL:
 - ${contas.filter(c => c.status === 'Em uso').length} contas Em Uso
@@ -408,7 +494,14 @@ REGRAS DO NEGÓCIO:
 - Quando "Em uso": lucro bruto = total sacado (o depósito ainda está na conta)
 - Quando "Finalizada": lucro bruto = total sacado - depósito
 - A % é o que fica com o dono da conta; o restante é de Régis
-- Gastos operacionais são despesas gerais (ferramentas, taxas, comissões) que saem do lucro de Régis
+- Gastos operacionais são despesas gerais que saem do lucro de Régis
+
+AUTONOMIA NA DASHBOARD:
+- Você tem acesso completo à dashboard em ${DASHBOARD_URL}
+- Use ler_dashboard para ver o HTML atual antes de modificar
+- Use patch_dashboard para mudanças pontuais (adicionar seção, mudar cor, texto)
+- Use atualizar_dashboard para reescrever a página inteira
+- Qualquer alteração de design, layout ou funcionalidade é possível
 
 COMPORTAMENTO:
 - Responda SEMPRE em português, de forma direta e amigável
@@ -416,7 +509,7 @@ COMPORTAMENTO:
 - Confirme as ações feitas com clareza
 - Se não entender algo, pergunte de forma simples
 - Para saques: pergunte se a conta foi finalizada ou continua em uso (a menos que o usuário já disse)
-- Para gastos: use registrar_gasto para despesas operacionais gerais (não vinculadas a conta específica)`;
+- Para mudanças na dashboard: leia o HTML atual, explique o que vai mudar, e depois aplique`;
 
   let messages = [...historicos[userId]];
   let resposta = '';
@@ -424,7 +517,7 @@ COMPORTAMENTO:
   while (true) {
     const res = await claude.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: 4096,
       system: systemPrompt,
       tools: TOOLS,
       messages
@@ -469,7 +562,8 @@ bot.start(ctx => {
     `• "Gasto de 50 com assinatura ferramenta"\n` +
     `• "Quanto tô lucrando no total?"\n` +
     `• "Lista as contas em uso"\n` +
-    `• "Mostra meus gastos"`
+    `• "Adiciona a seção de gastos na dashboard"\n` +
+    `• "Muda a cor do cabeçalho para azul"`
   );
 });
 
@@ -483,7 +577,8 @@ bot.help(ctx => {
     `✅ *Finalizar:* "finaliza a conta do [nome]"\n` +
     `📊 *Resumo:* "quanto lucrei total?", "resumo por fornecedor"\n` +
     `💸 *Gasto geral:* "gasto de [valor] com [descrição]"\n` +
-    `📋 *Ver gastos:* "mostra meus gastos", "lista gastos"`
+    `📋 *Ver gastos:* "mostra meus gastos"\n` +
+    `🎨 *Dashboard:* "adiciona [seção] na dashboard", "muda [elemento]"`
   );
 });
 
