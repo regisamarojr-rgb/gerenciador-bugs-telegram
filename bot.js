@@ -4,11 +4,10 @@ const Anthropic = require('@anthropic-ai/sdk');
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY;
-const ALLOWED_USER   = process.env.TELEGRAM_USER_ID; // seu user_id do Telegram
+const ALLOWED_USER   = process.env.TELEGRAM_USER_ID;
 const SB_URL         = process.env.SUPABASE_URL || 'https://vxthbjrdtwlnzzadmrmy.supabase.co';
 const SB_KEY         = process.env.SUPABASE_KEY || 'sb_publishable_MUJi3VnZ-f4cMhdLxZfR1A_pFmhhQSi';
-
-const OPENAI_KEY    = process.env.OPENAI_API_KEY;
+const OPENAI_KEY     = process.env.OPENAI_API_KEY;
 
 const bot    = new Telegraf(TELEGRAM_TOKEN);
 const claude = new Anthropic({ apiKey: ANTHROPIC_KEY });
@@ -43,6 +42,14 @@ async function sbPatch(table, id, body) {
   return r.json();
 }
 
+async function sbDelete(table, id) {
+  const r = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, {
+    method: 'DELETE', headers: SB_HDR
+  });
+  if (!r.ok) throw new Error(`SB DELETE ${table}: ${r.status} ${await r.text()}`);
+  return true;
+}
+
 // ─── TRANSCRIÇÃO DE ÁUDIO (WHISPER) ───────────────────────────────────────
 async function downloadTelegramFile(fileId) {
   const r = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
@@ -59,18 +66,15 @@ async function downloadTelegramFile(fileId) {
 async function transcribeAudio(fileId) {
   if (!OPENAI_KEY) throw new Error('OPENAI_API_KEY não configurada');
   const { buffer, ext } = await downloadTelegramFile(fileId);
-
   const form = new FormData();
   form.append('file', new Blob([buffer], { type: `audio/${ext}` }), `audio.${ext}`);
   form.append('model', 'whisper-1');
   form.append('language', 'pt');
-
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${OPENAI_KEY}` },
     body: form
   });
-
   if (!res.ok) throw new Error(`Whisper: ${res.status} ${await res.text()}`);
   const data = await res.json();
   return (data.text || '').trim();
@@ -78,11 +82,12 @@ async function transcribeAudio(fileId) {
 
 // ─── DADOS DO PAINEL ───────────────────────────────────────────────────────
 async function getContexto() {
-  const [contas, fornecedores] = await Promise.all([
+  const [contas, fornecedores, gastos] = await Promise.all([
     sbGet('contas', '?order=created_at.desc'),
-    sbGet('fornecedores', '?order=nome')
+    sbGet('fornecedores', '?order=nome'),
+    sbGet('gastos', '?order=data.desc')
   ]);
-  return { contas, fornecedores };
+  return { contas, fornecedores, gastos };
 }
 
 // ─── FÓRMULA DE LUCRO (mesma do painel) ───────────────────────────────────
@@ -91,7 +96,6 @@ function calcLucro(conta) {
   const totalSacado = saques.length ? saques.reduce((s, x) => s + x.val, 0) : (conta.sacado || 0);
   const hasSaque = saques.length > 0 || conta.sacado != null;
   if (!hasSaque) return null;
-
   const totalPerdas = (conta.perdas || []).reduce((s, p) => s + p.val, 0);
   const lucroBase = conta.status !== 'Finalizada' ? totalSacado : totalSacado - conta.depositado;
   const meuLucro = lucroBase >= 0 ? lucroBase * (1 - conta.pct / 100) - totalPerdas : lucroBase - totalPerdas;
@@ -124,12 +128,12 @@ const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        casa:        { type: 'string', description: 'Casa de apostas (ex: Bet365, Superbet, Novibet)' },
-        dono:        { type: 'string', description: 'Nome do dono/titular da conta' },
-        depositado:  { type: 'number', description: 'Valor depositado em R$' },
-        pct:         { type: 'number', description: 'Porcentagem do lucro que fica com o dono da conta (0-100)' },
-        fornecedor:  { type: 'string', description: 'Nome do fornecedor que indicou a conta (opcional)' },
-        data:        { type: 'string', description: 'Data do depósito no formato YYYY-MM-DD (padrão: hoje)' }
+        casa:       { type: 'string', description: 'Casa de apostas (ex: Bet365, Superbet, Novibet)' },
+        dono:       { type: 'string', description: 'Nome do dono/titular da conta' },
+        depositado: { type: 'number', description: 'Valor depositado em R$' },
+        pct:        { type: 'number', description: 'Porcentagem do lucro que fica com o dono da conta (0-100)' },
+        fornecedor: { type: 'string', description: 'Nome do fornecedor que indicou a conta (opcional)' },
+        data:       { type: 'string', description: 'Data do depósito no formato YYYY-MM-DD (padrão: hoje)' }
       },
       required: ['casa', 'dono', 'depositado', 'pct']
     }
@@ -140,17 +144,17 @@ const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        conta_ref:  { type: 'string', description: 'Nome do dono ou parte do nome para identificar a conta' },
-        valor:      { type: 'number', description: 'Valor sacado em R$' },
-        data:       { type: 'string', description: 'Data do saque YYYY-MM-DD (padrão: hoje)' },
-        finalizar:  { type: 'boolean', description: 'Se true, muda o status para Finalizada após o saque' }
+        conta_ref: { type: 'string', description: 'Nome do dono ou parte do nome para identificar a conta' },
+        valor:     { type: 'number', description: 'Valor sacado em R$' },
+        data:      { type: 'string', description: 'Data do saque YYYY-MM-DD (padrão: hoje)' },
+        finalizar: { type: 'boolean', description: 'Se true, muda o status para Finalizada após o saque' }
       },
       required: ['conta_ref', 'valor']
     }
   },
   {
     name: 'registrar_perda',
-    description: 'Registra uma perda (prejuízo) em uma conta.',
+    description: 'Registra uma perda (prejuízo) em uma conta específica de aposta.',
     input_schema: {
       type: 'object',
       properties: {
@@ -175,7 +179,7 @@ const TOOLS = [
   },
   {
     name: 'resumo_lucros',
-    description: 'Gera um resumo dos lucros totais, por fornecedor ou por período.',
+    description: 'Gera um resumo dos lucros totais (descontando gastos operacionais), por fornecedor ou por casa.',
     input_schema: {
       type: 'object',
       properties: {
@@ -183,12 +187,48 @@ const TOOLS = [
       },
       required: ['agrupar_por']
     }
+  },
+  {
+    name: 'registrar_gasto',
+    description: 'Registra um gasto operacional geral (não vinculado a uma conta específica). Ex: taxa de plataforma, ferramenta paga, comissão paga a alguém, custo de operação.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        descricao: { type: 'string', description: 'O que foi gasto (ex: "Assinatura ferramenta X", "Comissão João", "Taxa saque")' },
+        valor:     { type: 'number', description: 'Valor em R$' },
+        categoria: { type: 'string', description: 'Categoria opcional (ex: "ferramenta", "comissão", "taxa", "outros")' },
+        data:      { type: 'string', description: 'Data YYYY-MM-DD (padrão: hoje)' }
+      },
+      required: ['descricao', 'valor']
+    }
+  },
+  {
+    name: 'listar_gastos',
+    description: 'Lista os gastos operacionais registrados com total acumulado.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limite: { type: 'number', description: 'Quantidade máxima de gastos a mostrar (padrão: 10)' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'excluir_gasto',
+    description: 'Remove um gasto operacional pela descrição (use listar_gastos primeiro para ver os registros).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        descricao_ref: { type: 'string', description: 'Parte da descrição do gasto para identificá-lo' }
+      },
+      required: ['descricao_ref']
+    }
   }
 ];
 
 // ─── EXECUÇÃO DAS TOOLS ────────────────────────────────────────────────────
-async function executarTool(name, input, ctx) {
-  const { contas, fornecedores } = await getContexto();
+async function executarTool(name, input) {
+  const { contas, fornecedores, gastos } = await getContexto();
   const hoje = new Date().toISOString().slice(0, 10);
 
   if (name === 'listar_contas') {
@@ -200,7 +240,6 @@ async function executarTool(name, input, ctx) {
       if (forn) lista = lista.filter(c => c.fornecedor_id === forn.id);
     }
     if (!lista.length) return '📭 Nenhuma conta encontrada.';
-
     return lista.map(c => {
       const l = calcLucro(c);
       const forn = fornecedores.find(f => f.id === c.fornecedor_id);
@@ -213,24 +252,15 @@ async function executarTool(name, input, ctx) {
   }
 
   if (name === 'adicionar_conta') {
-    // Achar fornecedor pelo nome
     let fornecedor_id = null;
     if (input.fornecedor) {
       const forn = fornecedores.find(f => f.nome.toLowerCase().includes(input.fornecedor.toLowerCase()));
       if (forn) fornecedor_id = forn.id;
     }
-
     const nova = {
-      id: uid(),
-      casa: input.casa,
-      dono: input.dono,
-      depositado: input.depositado,
-      pct: input.pct,
-      status: 'Em uso',
-      fornecedor_id,
-      dataDeposito: input.data || hoje,
-      saques: [],
-      perdas: []
+      id: uid(), casa: input.casa, dono: input.dono,
+      depositado: input.depositado, pct: input.pct, status: 'Em uso',
+      fornecedor_id, dataDeposito: input.data || hoje, saques: [], perdas: []
     };
     await sbPost('contas', nova);
     return `✅ Conta *${nova.dono}* (${nova.casa}) adicionada!\nDep: R$ ${nova.depositado} | ${nova.pct}% dono${fornecedor_id ? ` | Forn: ${input.fornecedor}` : ''}`;
@@ -240,15 +270,11 @@ async function executarTool(name, input, ctx) {
     const conta = contas.find(c => c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()) && c.status === 'Em uso')
                 || contas.find(c => c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()));
     if (!conta) return `❌ Conta com "${input.conta_ref}" não encontrada.`;
-
     const saques = conta.saques || [];
     saques.push({ id: uid(), val: input.valor, data: input.data || hoje });
-
     const update = { saques };
     if (input.finalizar) update.status = 'Finalizada';
-
     await sbPatch('contas', conta.id, update);
-
     const nova = { ...conta, ...update };
     const l = calcLucro(nova);
     let resp = `✅ Saque de R$ ${input.valor} registrado em *${conta.dono}*${input.finalizar ? ' (conta finalizada)' : ''}.`;
@@ -260,7 +286,6 @@ async function executarTool(name, input, ctx) {
     const conta = contas.find(c => c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()) && c.status === 'Em uso')
                 || contas.find(c => c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()));
     if (!conta) return `❌ Conta com "${input.conta_ref}" não encontrada.`;
-
     const perdas = conta.perdas || [];
     perdas.push({ id: uid(), val: input.valor, desc: input.descricao || '', data: input.data || hoje });
     await sbPatch('contas', conta.id, { perdas });
@@ -277,6 +302,7 @@ async function executarTool(name, input, ctx) {
   if (name === 'resumo_lucros') {
     const ativas = contas.filter(c => c.status === 'Em uso' && calcLucro(c));
     const finalizadas = contas.filter(c => c.status === 'Finalizada' && calcLucro(c));
+    const totalGastos = (gastos || []).reduce((s, g) => s + g.valor, 0);
 
     if (input.agrupar_por === 'total') {
       let totalMeu = 0, totalCli = 0;
@@ -284,7 +310,11 @@ async function executarTool(name, input, ctx) {
         const l = calcLucro(c); if (!l) return;
         totalMeu += l.meuLucro; totalCli += l.lucroCliente;
       });
-      return `📊 *Resumo Geral*\n💰 Meu lucro total: R$ ${totalMeu.toFixed(2)}\n👥 Lucro clientes: R$ ${totalCli.toFixed(2)}\n\nEm uso: ${ativas.length} contas | Finalizadas: ${finalizadas.length}`;
+      const liquido = totalMeu - totalGastos;
+      let resp = `📊 *Resumo Geral*\n💰 Lucro bruto: R$ ${totalMeu.toFixed(2)}`;
+      if (totalGastos > 0) resp += `\n💸 Gastos operacionais: R$ ${totalGastos.toFixed(2)}\n✨ Lucro líquido: R$ ${liquido.toFixed(2)}`;
+      resp += `\n👥 Lucro clientes: R$ ${totalCli.toFixed(2)}\n\nEm uso: ${ativas.length} contas | Finalizadas: ${finalizadas.length}`;
+      return resp;
     }
 
     if (input.agrupar_por === 'fornecedor') {
@@ -296,9 +326,11 @@ async function executarTool(name, input, ctx) {
         if (!grupos[key]) grupos[key] = { meu: 0, cli: 0, n: 0 };
         grupos[key].meu += l.meuLucro; grupos[key].cli += l.lucroCliente; grupos[key].n++;
       });
-      return '📊 *Por Fornecedor*\n' + Object.entries(grupos).map(([k, v]) =>
+      let resp = '📊 *Por Fornecedor*\n' + Object.entries(grupos).map(([k, v]) =>
         `*${k}* (${v.n} contas)\n  💰 R$ ${v.meu.toFixed(2)} | 👥 R$ ${v.cli.toFixed(2)}`
       ).join('\n\n');
+      if (totalGastos > 0) resp += `\n\n💸 Gastos operacionais totais: R$ ${totalGastos.toFixed(2)}`;
+      return resp;
     }
 
     if (input.agrupar_por === 'casa') {
@@ -308,10 +340,42 @@ async function executarTool(name, input, ctx) {
         if (!grupos[c.casa]) grupos[c.casa] = { meu: 0, n: 0 };
         grupos[c.casa].meu += l.meuLucro; grupos[c.casa].n++;
       });
-      return '📊 *Por Casa*\n' + Object.entries(grupos).map(([k, v]) =>
+      let resp = '📊 *Por Casa*\n' + Object.entries(grupos).map(([k, v]) =>
         `*${k}* (${v.n} contas): R$ ${v.meu.toFixed(2)}`
       ).join('\n');
+      if (totalGastos > 0) resp += `\n\n💸 Gastos operacionais totais: R$ ${totalGastos.toFixed(2)}`;
+      return resp;
     }
+  }
+
+  if (name === 'registrar_gasto') {
+    const novo = {
+      id: uid(),
+      descricao: input.descricao,
+      valor: input.valor,
+      categoria: input.categoria || null,
+      data: input.data || hoje
+    };
+    await sbPost('gastos', novo);
+    return `✅ Gasto registrado: *${novo.descricao}* — R$ ${novo.valor.toFixed(2)}${novo.categoria ? ` [${novo.categoria}]` : ''}`;
+  }
+
+  if (name === 'listar_gastos') {
+    if (!gastos || !gastos.length) return '📭 Nenhum gasto operacional registrado.';
+    const limite = input.limite || 10;
+    const lista = gastos.slice(0, limite);
+    const total = gastos.reduce((s, g) => s + g.valor, 0);
+    const linhas = lista.map((g, i) =>
+      `${i + 1}. ${g.data} — *${g.descricao}*: R$ ${g.valor.toFixed(2)}${g.categoria ? ` [${g.categoria}]` : ''}`
+    ).join('\n');
+    return `📋 *Gastos Operacionais* (${gastos.length} total)\n${linhas}\n\n💸 Total: R$ ${total.toFixed(2)}`;
+  }
+
+  if (name === 'excluir_gasto') {
+    const gasto = (gastos || []).find(g => g.descricao.toLowerCase().includes(input.descricao_ref.toLowerCase()));
+    if (!gasto) return `❌ Gasto com "${input.descricao_ref}" não encontrado. Use listar_gastos para ver os registros.`;
+    await sbDelete('gastos', gasto.id);
+    return `✅ Gasto *${gasto.descricao}* (R$ ${gasto.valor.toFixed(2)}) removido.`;
   }
 
   return '❓ Ação desconhecida.';
@@ -322,13 +386,11 @@ const historicos = {};
 
 async function processarMensagem(userId, texto) {
   if (!historicos[userId]) historicos[userId] = [];
-
   historicos[userId].push({ role: 'user', content: texto });
-
-  // Limitar histórico a 20 mensagens
   if (historicos[userId].length > 20) historicos[userId] = historicos[userId].slice(-20);
 
-  const { contas, fornecedores } = await getContexto();
+  const { contas, fornecedores, gastos } = await getContexto();
+  const totalGastos = (gastos || []).reduce((s, g) => s + g.valor, 0);
 
   const systemPrompt = `Você é o assistente pessoal de Régis para gerenciar as contas de BUGS (apostas esportivas).
 
@@ -336,6 +398,7 @@ CONTEXTO ATUAL:
 - ${contas.filter(c => c.status === 'Em uso').length} contas Em Uso
 - ${contas.filter(c => c.status === 'Finalizada').length} contas Finalizadas
 - Fornecedores: ${fornecedores.map(f => f.nome).join(', ') || 'nenhum'}
+- Gastos operacionais: ${gastos.length} registros | Total: R$ ${totalGastos.toFixed(2)}
 
 CONTAS EM USO:
 ${contas.filter(c => c.status === 'Em uso').map(c => `- ${c.dono} (${c.casa}, dep R$${c.depositado}, ${c.pct}%)`).join('\n') || 'nenhuma'}
@@ -345,18 +408,19 @@ REGRAS DO NEGÓCIO:
 - Quando "Em uso": lucro bruto = total sacado (o depósito ainda está na conta)
 - Quando "Finalizada": lucro bruto = total sacado - depósito
 - A % é o que fica com o dono da conta; o restante é de Régis
+- Gastos operacionais são despesas gerais (ferramentas, taxas, comissões) que saem do lucro de Régis
 
 COMPORTAMENTO:
 - Responda SEMPRE em português, de forma direta e amigável
 - Use as tools disponíveis para executar ações
 - Confirme as ações feitas com clareza
 - Se não entender algo, pergunte de forma simples
-- Para saques: pergunte se a conta foi finalizada ou continua em uso (a menos que o usuário já disse)`;
+- Para saques: pergunte se a conta foi finalizada ou continua em uso (a menos que o usuário já disse)
+- Para gastos: use registrar_gasto para despesas operacionais gerais (não vinculadas a conta específica)`;
 
   let messages = [...historicos[userId]];
   let resposta = '';
 
-  // Loop de tool use (Claude pode chamar várias tools)
   while (true) {
     const res = await claude.messages.create({
       model: 'claude-haiku-4-5-20251001',
@@ -387,7 +451,6 @@ COMPORTAMENTO:
     break;
   }
 
-  // Salvar histórico limpo (sem tool_use interno)
   historicos[userId] = messages.filter(m =>
     m.role === 'user' && typeof m.content === 'string'
     || m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'text')
@@ -403,8 +466,10 @@ bot.start(ctx => {
     `• "Adiciona conta Bet365, João Silva, dep 500, 30%"\n` +
     `• "Saquei 2000 da conta do João"\n` +
     `• "Registra perda de 300 no Ricardo"\n` +
+    `• "Gasto de 50 com assinatura ferramenta"\n` +
     `• "Quanto tô lucrando no total?"\n` +
-    `• "Lista as contas em uso"`
+    `• "Lista as contas em uso"\n` +
+    `• "Mostra meus gastos"`
   );
 });
 
@@ -414,22 +479,18 @@ bot.help(ctx => {
     `📋 *Ver contas:* "lista as contas", "quais contas em uso"\n` +
     `➕ *Adicionar:* "adiciona conta [casa], [dono], dep [valor], [pct]%"\n` +
     `💸 *Saque:* "saquei [valor] da conta [nome]"\n` +
-    `📉 *Perda:* "registra perda de [valor] no [nome]"\n` +
+    `📉 *Perda em conta:* "registra perda de [valor] no [nome]"\n` +
     `✅ *Finalizar:* "finaliza a conta do [nome]"\n` +
-    `📊 *Resumo:* "quanto lucrei total?", "resumo por fornecedor"`
+    `📊 *Resumo:* "quanto lucrei total?", "resumo por fornecedor"\n` +
+    `💸 *Gasto geral:* "gasto de [valor] com [descrição]"\n` +
+    `📋 *Ver gastos:* "mostra meus gastos", "lista gastos"`
   );
 });
 
 bot.on('text', async ctx => {
   const userId = ctx.from.id.toString();
-
-  // Segurança: só Régis pode usar
-  if (ALLOWED_USER && userId !== ALLOWED_USER) {
-    return ctx.reply('⛔ Acesso não autorizado.');
-  }
-
-  const typing = ctx.sendChatAction('typing');
-
+  if (ALLOWED_USER && userId !== ALLOWED_USER) return ctx.reply('⛔ Acesso não autorizado.');
+  ctx.sendChatAction('typing');
   try {
     const resposta = await processarMensagem(userId, ctx.message.text);
     await ctx.replyWithMarkdown(resposta);
@@ -443,17 +504,11 @@ bot.on('text', async ctx => {
 async function handleAudioMsg(ctx, fileId) {
   const userId = ctx.from.id.toString();
   if (ALLOWED_USER && userId !== ALLOWED_USER) return ctx.reply('⛔ Acesso não autorizado.');
-
-  if (!OPENAI_KEY) {
-    return ctx.reply('⚠️ Transcrição de áudio requer OPENAI_API_KEY.\nAdicione nas variáveis de ambiente do Railway.');
-  }
-
+  if (!OPENAI_KEY) return ctx.reply('⚠️ Transcrição de áudio requer OPENAI_API_KEY.\nAdicione nas variáveis de ambiente do Railway.');
   await ctx.sendChatAction('typing');
   try {
     const texto = await transcribeAudio(fileId);
     if (!texto) return ctx.reply('⚠️ Não consegui entender o áudio. Tente falar novamente.');
-
-    // Mostra a transcrição e processa como texto normal
     await ctx.reply(`🎤 _"${texto}"_`, { parse_mode: 'Markdown' });
     const resposta = await processarMensagem(userId, texto);
     await ctx.replyWithMarkdown(resposta);
