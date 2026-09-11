@@ -605,7 +605,7 @@ async function executarTool(name, input) {
 // ─── HISTÓRICO DE CONVERSA POR USUÁRIO ────────────────────────────────────
 const historicos = {};
 
-ansync function processarMensagem(userId, texto) {
+async function processarMensagem(userId, texto) {
   if (!historicos[userId]) historicos[userId] = [];
   historicos[userId].push({ role: 'user', content: texto });
   if (historicos[userId].length > 20) historicos[userId] = historicos[userId].slice(-20);
