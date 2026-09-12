@@ -551,7 +551,6 @@ async function executarTool(name, input) {
       id: uid(),
       descricao: input.descricao,
       valor: input.valor,
-      categoria: input.categoria || null,
       data: input.data || hoje
     };
     await sbPost('gastos', novo);
