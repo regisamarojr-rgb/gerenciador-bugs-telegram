@@ -500,7 +500,7 @@ async function executarTool(name, input) {
   if (name === 'resumo_lucros') {
     const ativas = contas.filter(c => c.status === 'Em uso' && calcLucro(c));
     const finalizadas = contas.filter(c => c.status === 'Finalizada' && calcLucro(c));
-    const totalGastos = (gastos || []).reduce((s, g) => s + g.valor, 0);
+    const totalGastos = (gastos || []).reduce((s, g) => s + g.val, 0);
 
     if (input.agrupar_por === 'total') {
       let totalMeu = 0, totalCli = 0;
@@ -549,8 +549,8 @@ async function executarTool(name, input) {
   if (name === 'registrar_gasto') {
     const novo = {
       id: uid(),
-      descricao: input.descricao,
-      valor: input.valor,
+      cliente: input.descricao,
+      val: input.valor,
       data: input.data || hoje
     };
     await sbPost('gastos', novo);
@@ -561,18 +561,18 @@ async function executarTool(name, input) {
     if (!gastos || !gastos.length) return '📭 Nenhum gasto operacional registrado.';
     const limite = input.limite || 10;
     const lista = gastos.slice(0, limite);
-    const total = gastos.reduce((s, g) => s + g.valor, 0);
+    const total = gastos.reduce((s, g) => s + g.val, 0);
     const linhas = lista.map((g, i) =>
-      `${i + 1}. ${g.data} — *${g.descricao}*: R$ ${g.valor.toFixed(2)}${g.categoria ? ` [${g.categoria}]` : ''}`
+      `${i + 1}. ${g.data} — *${g.cliente}*: R$ ${g.val.toFixed(2)}${g.categoria ? ` [${g.categoria}]` : ''}`
     ).join('\n');
     return `📋 *Gastos Operacionais* (${gastos.length} total)\n${linhas}\n\n💸 Total: R$ ${total.toFixed(2)}`;
   }
 
   if (name === 'excluir_gasto') {
-    const gasto = (gastos || []).find(g => g.descricao.toLowerCase().includes(input.descricao_ref.toLowerCase()));
+    const gasto = (gastos || []).find(g => g.cliente.toLowerCase().includes(input.descricao_ref.toLowerCase()));
     if (!gasto) return `❌ Gasto com "${input.descricao_ref}" não encontrado. Use listar_gastos para ver os registros.`;
     await sbDelete('gastos', gasto.id);
-    return `✅ Gasto *${gasto.descricao}* (R$ ${gasto.valor.toFixed(2)}) removido.`;
+    return `✅ Gasto *${gasto.cliente}* (R$ ${gasto.val.toFixed(2)}) removido.`;
   }
 
   // ─── DASHBOARD TOOLS ──────────────────────────────────────────────────────
@@ -610,7 +610,7 @@ async function processarMensagem(userId, texto) {
   if (historicos[userId].length > 20) historicos[userId] = historicos[userId].slice(-20);
 
   const { contas, fornecedores, gastos } = await getContexto();
-  const totalGastos = (gastos || []).reduce((s, g) => s + g.valor, 0);
+  const totalGastos = (gastos || []).reduce((s, g) => s + g.val, 0);
 
   const systemPrompt = `Você é o assistente pessoal de Régis para gerenciar as contas de BUGS (apostas esportivas) e a dashboard.
 
