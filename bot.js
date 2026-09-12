@@ -554,7 +554,7 @@ async function executarTool(name, input) {
       data: input.data || hoje
     };
     await sbPost('gastos', novo);
-    return `✅ Gasto registrado: *${novo.descricao}* — R$ ${novo.valor.toFixed(2)}${novo.categoria ? ` [${novo.categoria}]` : ''}`;
+    return `✅ Gasto registrado: *${novo.cliente}* — R$ ${novo.val.toFixed(2)}${novo.categoria ? ` [${novo.categoria}]` : ''}`;
   }
 
   if (name === 'listar_gastos') {
