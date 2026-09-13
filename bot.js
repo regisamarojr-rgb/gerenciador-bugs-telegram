@@ -733,7 +733,11 @@ bot.on('text', async ctx => {
   ctx.sendChatAction('typing');
   try {
     const resposta = await processarMensagem(userId, ctx.message.text);
-    await ctx.replyWithMarkdown(resposta);
+    try {
+      await ctx.replyWithMarkdown(resposta);
+    } catch {
+      await ctx.reply(resposta.replace(/[*_`]/g, ''));
+    }
   } catch (err) {
     console.error('Erro:', err);
     await ctx.reply(`❌ Erro: ${err.message}`);
