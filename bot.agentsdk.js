@@ -94,11 +94,12 @@ return (data.text || '').trim();
 
 // ─── DADOS DO PAINEL ───────────────────────────────────────────────────────
 async function getContexto() {
-const [contas, fornecedores] = await Promise.all([
+const [contas, fornecedores, memorias] = await Promise.all([
 sbGet('contas', '?order=created_at.desc'),
-sbGet('fornecedores', '?order=nome')
+sbGet('fornecedores', '?order=nome'),
+sbGet('memoria', '?order=criado_em.desc')
 ]);
-return { contas, fornecedores };
+return { contas, fornecedores, memorias };
 }
 
 // ─── FÓRMULA DE LUCRO (mesma do painel) ───────────────────────────────────
@@ -263,6 +264,38 @@ await sbDelete('fornecedores', forn.id);
 return `🗑️ Fornecedor *${forn.nome}* apagado.`;
 }
 
+async function acaoLembrar(input) {
+const nova = {
+id: uid(),
+conteudo: input.conteudo,
+categoria: input.categoria || 'fato'
+};
+await sbPost('memoria', nova);
+return `🧠 Guardado na memória: "${nova.conteudo}" (${nova.categoria})`;
+}
+
+async function acaoEsquecer(input) {
+const { memorias } = await getContexto();
+const termo = input.termo.toLowerCase();
+const encontradas = memorias.filter(m => m.conteudo.toLowerCase().includes(termo));
+if (!encontradas.length) return `❌ Não encontrei nenhuma memória com "${input.termo}".`;
+if (encontradas.length > 1) {
+return `🔎 Encontrei ${encontradas.length} memórias com "${input.termo}":\n` +
+encontradas.map(m => `- ${m.conteudo}`).join('\n') +
+`\n\nMe diga qual delas apagar com mais detalhes.`;
+}
+await sbDelete('memoria', encontradas[0].id);
+return `🗑️ Memória apagada: "${encontradas[0].conteudo}"`;
+}
+
+async function acaoListarMemorias(input) {
+const { memorias } = await getContexto();
+let lista = memorias;
+if (input.categoria) lista = lista.filter(m => m.categoria === input.categoria);
+if (!lista.length) return '📭 Nenhuma memória guardada ainda.';
+return lista.map(m => `🧠 [${m.categoria}] ${m.conteudo}`).join('\n');
+}
+
 async function acaoResumoLucros(input) {
 const { contas, fornecedores } = await getContexto();
 const ativas = contas.filter(c => c.status === 'Em uso' && calcLucro(c));
@@ -418,6 +451,31 @@ tool(
 agrupar_por: z.enum(['total', 'fornecedor', 'casa']).describe('Como agrupar o resumo')
 },
 async (input) => toolText(await acaoResumoLucros(input))
+),
+tool(
+'lembrar',
+'Guarda uma informação na memória de longo prazo do bot (preferências do Régis, fatos sobre contas/fornecedores que não estão nos campos estruturados, ou decisões combinadas). Use tanto quando o usuário pedir explicitamente ("lembra disso", "guarda essa info", "anota aí") quanto por conta própria quando perceber algo importante e duradouro na conversa.',
+{
+conteudo: z.string().describe('O que guardar na memória, de forma clara e objetiva'),
+categoria: z.enum(['preferencia', 'fato', 'decisao']).optional().describe('Tipo da memória (padrão: fato)')
+},
+async (input) => toolText(await acaoLembrar(input))
+),
+tool(
+'esquecer',
+'Apaga uma memória guardada anteriormente. Ação IRREVERSÍVEL — só chame esta tool depois que o usuário confirmar explicitamente que quer apagar.',
+{
+termo: z.string().describe('Palavra ou trecho que identifica a memória a apagar')
+},
+async (input) => toolText(await acaoEsquecer(input))
+),
+tool(
+'listar_memorias',
+'Lista as memórias guardadas na memória de longo prazo, opcionalmente filtradas por categoria.',
+{
+categoria: z.enum(['preferencia', 'fato', 'decisao']).optional().describe('Filtrar por categoria (opcional)')
+},
+async (input) => toolText(await acaoListarMemorias(input))
 )
 ]
 });
@@ -434,7 +492,10 @@ const BUGS_TOOL_NAMES = [
 'mcp__bugs__reabrir_conta',
 'mcp__bugs__adicionar_fornecedor',
 'mcp__bugs__apagar_fornecedor',
-'mcp__bugs__resumo_lucros'
+'mcp__bugs__resumo_lucros',
+'mcp__bugs__lembrar',
+'mcp__bugs__esquecer',
+'mcp__bugs__listar_memorias'
 ];
 
 // Ferramentas nativas do Claude Code que NÃO queremos que o bot use nunca
@@ -451,7 +512,7 @@ const BUILTIN_TOOLS_BLOQUEADAS = [
 const sessions = {};
 
 async function processarMensagem(userId, texto) {
-const { contas, fornecedores } = await getContexto();
+const { contas, fornecedores, memorias } = await getContexto();
 
 const systemPrompt = `Você é o assistente pessoal de Régis para gerenciar as contas de BUGS (apostas esportivas).
 
@@ -462,6 +523,9 @@ CONTEXTO ATUAL:
 
 CONTAS EM USO:
 ${contas.filter(c => c.status === 'Em uso').map(c => `- ${c.dono} (${c.casa}, dep R$${c.depositado}, ${c.pct}%)`).join('\n') || 'nenhuma'}
+
+MEMÓRIA DE LONGO PRAZO (coisas que você já sabe de conversas anteriores, sobrevive a reinícios):
+${memorias.length ? memorias.map(m => `- [${m.categoria}] ${m.conteudo}`).join('\n') : 'nenhuma memória guardada ainda'}
 
 REGRAS DO NEGÓCIO:
 - BUGS são contas de terceiros onde Régis deposita e faz apostas
@@ -476,7 +540,8 @@ COMPORTAMENTO:
 - Confirme as ações feitas com clareza
 - Se não entender algo, pergunte de forma simples
 - Para saques: pergunte se a conta foi finalizada ou continua em uso (a menos que o usuário já disse)
-- IMPORTANTE: apagar_conta e apagar_fornecedor são ações IRREVERSÍVEIS. Antes de chamar essas tools, sempre explique o que vai ser perdido (ex: histórico de saques/perdas) e peça confirmação explícita do usuário (ex: "sim", "pode apagar", "confirmo"). Só chame a tool de apagar depois de receber essa confirmação numa mensagem seguinte — nunca apague no mesmo turno do primeiro pedido`;
+- MEMÓRIA: você tem memória de longo prazo persistente (lista acima), que sobrevive entre conversas e reinícios do bot. Use a tool "lembrar" tanto quando o usuário pedir explicitamente ("lembra disso", "guarda essa info", "anota aí") quanto por conta própria, sem precisar pedir permissão, sempre que perceber algo importante e duradouro na conversa (uma preferência do Régis, um fato relevante sobre uma conta ou fornecedor que não está nos campos estruturados, ou uma decisão combinada) — só guarde e avise brevemente em uma linha, sem fazer alarde. Use "listar_memorias" se o usuário perguntar o que você lembra ou sabe sobre algo. Use "esquecer" apenas depois de confirmação explícita do usuário.
+- IMPORTANTE: apagar_conta, apagar_fornecedor e esquecer são ações IRREVERSÍVEIS. Antes de chamar essas tools, sempre explique o que vai ser perdido (ex: histórico de saques/perdas, ou o conteúdo da memória) e peça confirmação explícita do usuário (ex: "sim", "pode apagar", "confirmo"). Só chame a tool depois de receber essa confirmação numa mensagem seguinte — nunca apague no mesmo turno do primeiro pedido`;
 
 const opts = {
 systemPrompt,
@@ -540,7 +605,8 @@ ctx.replyWithMarkdown(
 `↩️ *Reabrir:* "reabre a conta do [nome]"\n` +
 `🗑️ *Apagar:* "apaga a conta do [nome]" (pede confirmação antes)\n` +
 `🤝 *Fornecedores:* "adiciona o fornecedor [nome]", "apaga o fornecedor [nome]"\n` +
-`📊 *Resumo:* "quanto lucrei total?", "resumo por fornecedor"`
+`📊 *Resumo:* "quanto lucrei total?", "resumo por fornecedor"\n` +
+`🧠 *Memória:* "lembra disso: ...", "o que você sabe sobre o João?", "esquece aquilo do..."`
 );
 });
 
