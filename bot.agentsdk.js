@@ -113,7 +113,7 @@ function uid() {
 }
 
 // ─── AÇÕES (mesma lógica de negócio do bot.js original) ───────────────────
-`sync function acaoListarContas(input) {
+async function acaoListarContas(input) {
   const { contas, fornecedores } = await getContexto();
   let lista = contas;
   if (input.filtro_status && input.filtro_status !== 'todas')
@@ -436,7 +436,7 @@ bot.on('text', async ctx => {
 
   try {
     const resposta = await processarMensagem(userId, ctx.message.text);
-    await ctx.replyWithMarkdownresposta);
+    await ctx.replyWithMarkdown(resposta);
   } catch (err) {
     console.error('Erro:', err);
     await ctx.reply(`❌ Erro: ${err.message}`);
