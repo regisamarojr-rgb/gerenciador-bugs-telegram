@@ -339,7 +339,20 @@ return '📊 *Por Casa*\n' + Object.entries(grupos).map(([k, v]) =>
 return '❓ Agrupamento desconhecido.';
 }
 
-async function acaoRegistrarGasto(input) { const hoje = new Date().toISOString().slice(0, 10); const gasto = { id: uid(), val: input.valor, data: input.data || hoje, cliente: (input.cliente || '').trim(), obs: (input.observacao || '').trim() }; await sbPost('gastos', gasto); return `✅ Gasto de R$ ${input.valor} registrado${gasto.cliente ? ` (cliente: ${gasto.cliente})` : ''}.${gasto.obs ? ` Obs: ${gasto.obs}` : ''}`; } // ─── TOOLS (Agent SDK) ──────────────────────────────────────────────────────
+async function acaoRegistrarInadimplente(input){const{contas}=await getContexto();const hoje=new Date().toISOString().slice(0,10);let conta=null;if(input.conta_ref){conta=contas.find(c=>c.dono.toLowerCase().includes(input.conta_ref.toLowerCase()));}const registro={id:uid(),conta_id:conta?conta.id:null,conta_dono:conta?conta.dono:(input.conta_ref||''),conta_casa:conta?conta.casa:'',nome_completo:input.nome_completo,whatsapp:input.whatsapp||'',endereco:input.endereco||'',cpf:input.cpf||'',valor_prejuizo:input.valor,data:input.data||hoje,observacao:input.observacao||''};await sbPost('inadimplentes',registro);return `🔴 Inadimplente registrado: *${registro.nome_completo}* — prejuízo de R$ ${input.valor}${registro.conta_dono?` (conta: ${registro.conta_dono})`:''}.`;}
+
+async function acaoListarInadimplentes(input){const lista=await sbGet('inadimplentes','?order=data.desc');if(!lista.length)return '📭 Nenhum inadimplente registrado.';return lista.map(x=>`🔴 *${x.nome_completo}* — R$ ${(+x.valor_prejuizo).toFixed(2)}${x.conta_dono?` (conta: ${x.conta_dono})`:''}${x.whatsapp?` | WhatsApp: ${x.whatsapp}`:''}${x.observacao?` | Obs: ${x.observacao}`:''}`).join(' // ');}
+
+async function acaoApagarInadimplente(input){const lista=await sbGet('inadimplentes','?order=data.desc');const encontrado=lista.find(x=>x.nome_completo.toLowerCase().includes(input.nome_ref.toLowerCase()));if(!encontrado)return `❌ Inadimplente com "${input.nome_ref}" não encontrado.`;await sbDelete('inadimplentes',encontrado.id);return `🗑️ Registro de inadimplente *${encontrado.nome_completo}* apagado.`;}
+
+async function acaoRegistrarGasto(input) {
+const hoje = new Date().toISOString().slice(0, 10);
+const gasto = { id: uid(), val: input.valor, data: input.data || hoje, cliente: (input.cliente || '').trim(), obs: (input.observacao || '').trim() };
+await sbPost('gastos', gasto);
+return `✅ Gasto de R$ ${input.valor} registrado${gasto.cliente ? ` (cliente: ${gasto.cliente})` : ''}.${gasto.obs ? ` Obs: ${gasto.obs}` : ''}`;
+}
+
+// ─── TOOLS (Agent SDK) ──────────────────────────────────────────────────────
 const toolText = (texto) => ({ content: [{ type: 'text', text: texto }] });
 
 const bugsServer = createSdkMcpServer({
@@ -475,7 +488,47 @@ tool(
 {
 categoria: z.enum(['preferencia', 'fato', 'decisao']).optional().describe('Filtrar por categoria (opcional)')
 },
-async (input) => toolText(await acaoListarMemorias(input)) ), tool( 'registrar_gasto', 'Registra um novo gasto (ex: adiantamento ou reembolso pra cliente) — o mesmo que o botão "+ Novo Gasto" do painel. O valor é abatido do lucro líquido de Régis.', { valor: z.number().describe('Valor do gasto em R$'), cliente: z.string().optional().describe('Nome do cliente relacionado ao gasto (opcional)'), observacao: z.string().optional().describe('Observação, ex: "adiantamento", "reembolso" (opcional)'), data: z.string().optional().describe('Data do gasto YYYY-MM-DD (padrão: hoje)') }, async (input) => toolText(await acaoRegistrarGasto(input))
+async (input) => toolText(await acaoListarMemorias(input))
+),
+tool(
+'registrar_inadimplente',
+'Registra um cliente inadimplente (que deu calote, sumiu com o dinheiro do depósito ou dos ganhos). É só um registro informativo — não afeta o lucro líquido.',
+{
+nome_completo: z.string().describe('Nome completo do inadimplente'),
+valor: z.number().describe('Valor do prejuízo em R$'),
+conta_ref: z.string().optional().describe('Nome do dono da conta vinculada (opcional, se relacionado a uma conta BUGS)'),
+whatsapp: z.string().optional().describe('Número de WhatsApp do inadimplente (opcional)'),
+endereco: z.string().optional().describe('Endereço do inadimplente (opcional)'),
+cpf: z.string().optional().describe('CPF do inadimplente (opcional)'),
+observacao: z.string().optional().describe('Observação adicional (opcional)'),
+data: z.string().optional().describe('Data YYYY-MM-DD (padrão: hoje)')
+},
+async (input) => toolText(await acaoRegistrarInadimplente(input))
+),
+tool(
+'listar_inadimplentes',
+'Lista todos os inadimplentes registrados, com valor do prejuízo e dados de contato.',
+{},
+async (input) => toolText(await acaoListarInadimplentes(input))
+),
+tool(
+'apagar_inadimplente',
+'Apaga permanentemente um registro de inadimplente. Ação IRREVERSÍVEL — só chame esta tool depois que o usuário confirmou explicitamente que quer apagar.',
+{
+nome_ref: z.string().describe('Nome ou parte do nome do inadimplente')
+},
+async (input) => toolText(await acaoApagarInadimplente(input))
+),
+tool(
+'registrar_gasto',
+'Registra um novo gasto (ex: adiantamento ou reembolso pra cliente) — o mesmo que o botão "+ Novo Gasto" do painel. O valor é abatido do lucro líquido de Régis.',
+{
+valor: z.number().describe('Valor do gasto em R$'),
+cliente: z.string().optional().describe('Nome do cliente relacionado ao gasto (opcional)'),
+observacao: z.string().optional().describe('Observação, ex: "adiantamento", "reembolso" (opcional)'),
+data: z.string().optional().describe('Data do gasto YYYY-MM-DD (padrão: hoje)')
+},
+async (input) => toolText(await acaoRegistrarGasto(input))
 )
 ]
 });
@@ -495,7 +548,11 @@ const BUGS_TOOL_NAMES = [
 'mcp__bugs__resumo_lucros',
 'mcp__bugs__lembrar',
 'mcp__bugs__esquecer',
-'mcp__bugs__listar_memorias', 'mcp__bugs__registrar_gasto'
+'mcp__bugs__listar_memorias',
+'mcp__bugs__registrar_inadimplente',
+'mcp__bugs__listar_inadimplentes',
+'mcp__bugs__apagar_inadimplente',
+'mcp__bugs__registrar_gasto'
 ];
 
 // Ferramentas nativas do Claude Code que NÃO queremos que o bot use nunca
@@ -541,10 +598,11 @@ COMPORTAMENTO:
 - Se não entender algo, pergunte de forma simples
 - Para saques: pergunte se a conta foi finalizada ou continua em uso (a menos que o usuário já disse)
 - GASTOS: use "registrar_gasto" quando o Régis pedir pra anotar um gasto/adiantamento/reembolso pra cliente — é abatido automaticamente do lucro líquido dele, igual ao botão "+ Novo Gasto" do painel
+- INADIMPLENTES: use "registrar_inadimplente" quando o Régis pedir pra anotar um cliente que deu calote, sumiu com o dinheiro do depósito ou dos ganhos — é só um registro informativo (nome completo, whatsapp, endereço, cpf, valor do prejuízo, e opcionalmente a conta vinculada), NÃO afeta o lucro líquido dele. Use "listar_inadimplentes" quando ele quiser consultar os registros, e "apagar_inadimplente" pra remover um (com confirmação antes, é irreversível)
 - MEMÓRIA: você tem memória de longo prazo persistente (lista acima), que sobrevive entre conversas e reinícios do bot. Use a tool "lembrar" tanto quando o usuário pedir explicitamente ("lembra disso", "guarda essa info", "anota aí") quanto por conta própria, sem precisar pedir permissão, sempre que perceber algo importante e duradouro na conversa (uma preferência do Régis, um fato relevante sobre uma conta ou fornecedor que não está nos campos estruturados, ou uma decisão combinada) — só guarde e avise brevemente em uma linha, sem fazer alarde. Use "listar_memorias" se o usuário perguntar o que você lembra ou sabe sobre algo. Use "esquecer" apenas depois de confirmação explícita do usuário.
-- IMPORTANTE: apagar_conta, apagar_fornecedor e esquecer são ações IRREVERSÍVEIS. Antes de chamar essas tools, sempre explique o que vai ser perdido (ex: histórico de saques/perdas, ou o conteúdo da memória) e peça confirmação explícita do usuário (ex: "sim", "pode apagar", "confirmo"). Só chame a tool depois de receber essa confirmação numa mensagem seguinte — nunca apague no mesmo turno do primeiro pedido
+- IMPORTANTE: apagar_conta, apagar_fornecedor, apagar_inadimplente e esquecer são ações IRREVERSÍVEIS. Antes de chamar essas tools, sempre explique o que vai ser perdido (ex: histórico de saques/perdas, o registro do inadimplente, ou o conteúdo da memória) e peça confirmação explícita do usuário (ex: "sim", "pode apagar", "confirmo"). Só chame a tool depois de receber essa confirmação numa mensagem seguinte — nunca apague no mesmo turno do primeiro pedido
 
-FORA DO ESCOPO: você NÃO tem nenhum acesso ao código-fonte, à infraestrutura (Railway/GitHub) ou ao design/layout do dashboard — sua autonomia é só sobre os dados do gerenciador (contas, fornecedores, memória). Se o Régis pedir algo desse tipo (ex: "muda o design do painel", "mexe no código", "adiciona uma tela nova", "muda uma cor", "corrige um bug no site") — mesmo que pareça simples — responda educadamente que você não tem autonomia técnica pra isso, que esse tipo de mudança é feito diretamente com ele (o Régis) fora do Telegram, e não tente executar nem sugerir tools pra isso.`;
+FORA DO ESCOPO: você NÃO tem nenhum acesso ao código-fonte, à infraestrutura (Railway/GitHub) ou ao design/layout do dashboard — sua autonomia é só sobre os dados do gerenciador (contas, fornecedores, inadimplentes, memória). Se o Régis pedir algo desse tipo (ex: "muda o design do painel", "mexe no código", "adiciona uma tela nova", "muda uma cor", "corrige um bug no site") — mesmo que pareça simples — responda educadamente que você não tem autonomia técnica pra isso, que esse tipo de mudança é feito diretamente com ele (o Régis) fora do Telegram, e não tente executar nem sugerir tools pra isso.`;
 
 const opts = {
 systemPrompt,
@@ -609,8 +667,9 @@ ctx.replyWithMarkdown(
 `🗑️ *Apagar:* "apaga a conta do [nome]" (pede confirmação antes)\n` +
 `🤝 *Fornecedores:* "adiciona o fornecedor [nome]", "apaga o fornecedor [nome]"\n` +
 `📊 *Resumo:* "quanto lucrei total?", "resumo por fornecedor"\n` +
-`🧠 *Memória:* "lembra disso: ...", "o que você sabe sobre o João?", "esquece aquilo do..."
-` + `💸 *Gasto:* "registra um gasto de [valor] pro cliente [nome]", "anota um adiantamento de [valor]`
+`🧠 *Memória:* "lembra disso: ...", "o que você sabe sobre o João?", "esquece aquilo do..."\n` +
+`💸 *Gasto:* "registra um gasto de [valor] pro cliente [nome]", "anota um adiantamento de [valor]"\n` +
+`🔴 *Inadimplente:* "registra o [nome] como inadimplente, prejuízo de [valor], whatsapp [numero]", "lista os inadimplentes", "apaga o inadimplente [nome]"`
 );
 });
 
