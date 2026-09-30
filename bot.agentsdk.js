@@ -339,7 +339,7 @@ return '📊 *Por Casa*\n' + Object.entries(grupos).map(([k, v]) =>
 return '❓ Agrupamento desconhecido.';
 }
 
-// ─── TOOLS (Agent SDK) ──────────────────────────────────────────────────────
+async function acaoRegistrarGasto(input) { const hoje = new Date().toISOString().slice(0, 10); const gasto = { id: uid(), val: input.valor, data: input.data || hoje, cliente: (input.cliente || '').trim(), obs: (input.observacao || '').trim() }; await sbPost('gastos', gasto); return `✅ Gasto de R$ ${input.valor} registrado${gasto.cliente ? ` (cliente: ${gasto.cliente})` : ''}.${gasto.obs ? ` Obs: ${gasto.obs}` : ''}`; } // ─── TOOLS (Agent SDK) ──────────────────────────────────────────────────────
 const toolText = (texto) => ({ content: [{ type: 'text', text: texto }] });
 
 const bugsServer = createSdkMcpServer({
@@ -475,7 +475,7 @@ tool(
 {
 categoria: z.enum(['preferencia', 'fato', 'decisao']).optional().describe('Filtrar por categoria (opcional)')
 },
-async (input) => toolText(await acaoListarMemorias(input))
+async (input) => toolText(await acaoListarMemorias(input)) ), tool( 'registrar_gasto', 'Registra um novo gasto (ex: adiantamento ou reembolso pra cliente) — o mesmo que o botão "+ Novo Gasto" do painel. O valor é abatido do lucro líquido de Régis.', { valor: z.number().describe('Valor do gasto em R$'), cliente: z.string().optional().describe('Nome do cliente relacionado ao gasto (opcional)'), observacao: z.string().optional().describe('Observação, ex: "adiantamento", "reembolso" (opcional)'), data: z.string().optional().describe('Data do gasto YYYY-MM-DD (padrão: hoje)') }, async (input) => toolText(await acaoRegistrarGasto(input))
 )
 ]
 });
@@ -495,7 +495,7 @@ const BUGS_TOOL_NAMES = [
 'mcp__bugs__resumo_lucros',
 'mcp__bugs__lembrar',
 'mcp__bugs__esquecer',
-'mcp__bugs__listar_memorias'
+'mcp__bugs__listar_memorias', 'mcp__bugs__registrar_gasto'
 ];
 
 // Ferramentas nativas do Claude Code que NÃO queremos que o bot use nunca
@@ -540,6 +540,7 @@ COMPORTAMENTO:
 - Confirme as ações feitas com clareza
 - Se não entender algo, pergunte de forma simples
 - Para saques: pergunte se a conta foi finalizada ou continua em uso (a menos que o usuário já disse)
+- GASTOS: use "registrar_gasto" quando o Régis pedir pra anotar um gasto/adiantamento/reembolso pra cliente — é abatido automaticamente do lucro líquido dele, igual ao botão "+ Novo Gasto" do painel
 - MEMÓRIA: você tem memória de longo prazo persistente (lista acima), que sobrevive entre conversas e reinícios do bot. Use a tool "lembrar" tanto quando o usuário pedir explicitamente ("lembra disso", "guarda essa info", "anota aí") quanto por conta própria, sem precisar pedir permissão, sempre que perceber algo importante e duradouro na conversa (uma preferência do Régis, um fato relevante sobre uma conta ou fornecedor que não está nos campos estruturados, ou uma decisão combinada) — só guarde e avise brevemente em uma linha, sem fazer alarde. Use "listar_memorias" se o usuário perguntar o que você lembra ou sabe sobre algo. Use "esquecer" apenas depois de confirmação explícita do usuário.
 - IMPORTANTE: apagar_conta, apagar_fornecedor e esquecer são ações IRREVERSÍVEIS. Antes de chamar essas tools, sempre explique o que vai ser perdido (ex: histórico de saques/perdas, ou o conteúdo da memória) e peça confirmação explícita do usuário (ex: "sim", "pode apagar", "confirmo"). Só chame a tool depois de receber essa confirmação numa mensagem seguinte — nunca apague no mesmo turno do primeiro pedido
 
@@ -608,7 +609,8 @@ ctx.replyWithMarkdown(
 `🗑️ *Apagar:* "apaga a conta do [nome]" (pede confirmação antes)\n` +
 `🤝 *Fornecedores:* "adiciona o fornecedor [nome]", "apaga o fornecedor [nome]"\n` +
 `📊 *Resumo:* "quanto lucrei total?", "resumo por fornecedor"\n` +
-`🧠 *Memória:* "lembra disso: ...", "o que você sabe sobre o João?", "esquece aquilo do..."`
+`🧠 *Memória:* "lembra disso: ...", "o que você sabe sobre o João?", "esquece aquilo do..."
+` + `💸 *Gasto:* "registra um gasto de [valor] pro cliente [nome]", "anota um adiantamento de [valor]`
 );
 });
 
